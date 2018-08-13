@@ -4,7 +4,7 @@ Views for User Manager Application.
 from __future__ import absolute_import, unicode_literals
 
 from rest_framework import status
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.generics import ListAPIView, ListCreateAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -13,6 +13,7 @@ from django.contrib.auth.models import User
 from django.db.models import Q
 
 from ...models import UserManagerRole
+from ...utils import get_user_by_username_or_email
 from .serializers import ManagerListSerializer, ManagerReportsSerializer, UserManagerSerializer
 
 
@@ -78,6 +79,37 @@ class ManagerViewMixin(object):
         ]
 
 
+class BulkCreateMixin(object):
+    """Allows bulk creation of a resource."""
+    def __init__(self):
+        self.bulk_operation = False
+        self.errors = []
+
+    def get_serializer(self, *args, **kwargs):
+        if isinstance(kwargs.get('data', {}), list):
+            self.bulk_operation = True
+            kwargs['many'] = True
+
+        return super(BulkCreateMixin, self).get_serializer(*args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reports = self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+
+        status_code = status.HTTP_201_CREATED
+        serialized_reports = serializer.to_representation(reports)
+
+        data = {'results': serialized_reports} if self.bulk_operation else serialized_reports
+
+        if self.errors:
+            status_code = status.HTTP_202_ACCEPTED
+            data.update({'errors': self.errors})
+
+        return Response(data, status=status_code, headers=headers)
+
+
 class ManagerListView(ManagerViewMixin, ListAPIView):
     """
         **Use Case**
@@ -140,13 +172,15 @@ class ManagerListView(ManagerViewMixin, ListAPIView):
     ).distinct()
 
 
-class ManagerReportsListView(ManagerViewMixin, ListCreateAPIView):
+class ManagerReportsListView(ManagerViewMixin, BulkCreateMixin, ListCreateAPIView):
     """
         **Use Cases**
 
             * Get a list of all users that are reports for the provided manager.
 
             * Add a user as a report under a manger.
+
+            * Add multiple users as reports under a manger.
 
             * Remove a user or all users under a manager.
 
@@ -203,7 +237,7 @@ class ManagerReportsListView(ManagerViewMixin, ListCreateAPIView):
             }
 
 
-        **POST Request**
+        **POST Request Single report **
 
         ::
 
@@ -228,6 +262,62 @@ class ManagerReportsListView(ManagerViewMixin, ListCreateAPIView):
             {
                 "email": "user@email.com"
                 "username": "user"
+            }
+
+
+        **POST Request Multiple report **
+
+        ::
+
+            POST /api/user_manager/v1/managers/{user_id}/reports/ [
+                {
+                    "username": "user"
+                },
+                {
+                    "email": "email@example.com"
+                },
+                {
+                    "email": "anotheremail@example.com"
+                }
+            ]
+        **POST Parameters for multiple creation**
+            A JSON list of objects each contains one of the following:
+                * username: username or email address for user for whom you want to add a manger
+
+                * email: Email address for a user for whom you want to add a manger
+
+        **POST Response Example Multiple report**
+
+        ::
+
+            POST /api/user_manager/v1/reports/edx@example.com/reports/ [
+                {
+                    "username": "user1"
+                },
+                {
+                    "email": "email@example.com"
+                },
+                {
+                    "email": "anotheremail@example.com"
+                }
+            ]
+
+            {
+                "errors": [
+                    {
+                        "detail": "No user with that identifier: anotheremail@example.com"
+                    }
+                ],
+                "results": [
+                    {
+                        "email": "user@example.com",
+                        "username": "user"
+                    },
+                    {
+                        "email": "email@example.com",
+                        "username": "email"
+                    }
+                ]
             }
 
         **Delete Requests**
@@ -257,25 +347,63 @@ class ManagerReportsListView(ManagerViewMixin, ListCreateAPIView):
         """
         Use serializer to create ``UserManagerRole`` object using provided data.
         """
-
         manager_id = self.kwargs['username']
-        email = serializer.validated_data.get('user', {}).get('email')
+
+        if not self.bulk_operation:
+            email = serializer.validated_data.get('user', {}).get('email')
+            username = serializer.validated_data.get('user', {}).get('username')
+
+            data = self.process_report(manager_id, username=username, email=email)
+            return serializer.create(data)
+
+        reports = []
+        for serialized_report in serializer.validated_data:
+            email = serialized_report.get('user', {}).get('email')
+            username = serialized_report.get('user', {}).get('username')
+            try:
+                data = self.process_report(manager_id, username=username, email=email)
+                reports.append(data)
+            except NotFound as e:
+                self.errors.append({
+                    'detail': e.detail
+                })
+
+        return serializer.create(reports)
+
+    @staticmethod
+    def process_report(manager_id, username=None, email=None):
+        """
+        This method will parse the provided values in the request and returns
+        them validated as in the database.
+        :param manager_id: The manager email or username
+        :param username: the user username
+        :param email: The user email
+        :return: A dict of the parsed values of the user and the manager_user.
+        """
+        identifier = email or username
+        if not identifier:
+            raise ValidationError('A `username` or `email` must be specified')
 
         try:
-            user = User.objects.get(email=email)
+            user = get_user_by_username_or_email(identifier)
         except User.DoesNotExist:
-            raise NotFound(detail='No user with that email')
+            raise NotFound(detail='No user with identifier: {}'.format(identifier))
 
         if '@' in manager_id:
             try:
                 manager_user = User.objects.get(email=manager_id)
             except User.DoesNotExist:
-                serializer.save(user=user, unregistered_manager_email=manager_id)
-                return
+                return {
+                    'user': user,
+                    'unregistered_manager_email': manager_id,
+                }
         else:
             manager_user = User.objects.get(username=manager_id)
 
-        serializer.save(manager_user=manager_user, user=user)
+        return {
+            'user': user,
+            'manager_user': manager_user,
+        }
 
     def delete(self, request, *args, **kwargs):  # pylint: disable=unused-argument
         """
@@ -392,17 +520,6 @@ class UserManagerListView(ManagerViewMixin, ListCreateAPIView):
 
     serializer_class = UserManagerSerializer
 
-    @staticmethod
-    def _get_user_by_username_or_email(identifier):
-        """
-        Get user by identifier, which could be an email or username.
-        """
-
-        if '@' in identifier:
-            return User.objects.get(email=identifier)
-        else:
-            return User.objects.get(username=identifier)
-
     def get_queryset(self):
         """
         Get queryset filtered by username.
@@ -417,7 +534,7 @@ class UserManagerListView(ManagerViewMixin, ListCreateAPIView):
         """
 
         try:
-            user = self._get_user_by_username_or_email(self.kwargs['username'])
+            user = get_user_by_username_or_email(self.kwargs['username'])
         except User.DoesNotExist:
             raise NotFound(detail='No user with that email')
 

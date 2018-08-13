@@ -4,6 +4,7 @@ Tests for User Manager Application views
 from __future__ import absolute_import, unicode_literals
 
 import ddt
+import json
 from mock import PropertyMock, patch
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.test import APIClient
@@ -81,6 +82,41 @@ class UserManagerRoleViewsTest(TestCase):
         results = response.data['results']
         self.assertEqual(len(results), 5)
 
+    def test_manager_reports_list_post_multiple(self):
+        url = reverse(
+            'v1:manager-reports-list',
+            kwargs={'username': self.managers[0].email},
+        )
+
+        new_user1 = User.objects.create(username='new_user1', email='new_user1@example.org')
+        new_user2 = User.objects.create(username='new_user2', email='new_user2@example.org')
+        bad_email = 'notouruser@somedomain.com'
+        data = json.dumps([
+            {'email': new_user1.email},
+            {'username': new_user2.username},
+            {'email': bad_email},
+        ])
+        response = self.client.post(url, data=data, content_type='application/json')
+        data = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(data['results']), 2)
+        self.assertEqual(data['errors'], [{'detail': 'No user with identifier: {}'.format(bad_email)}])
+
+        query = UserManagerRole.objects.filter(manager_user=self.managers[0])
+        self.assertEqual(query.count(), 7)
+
+    def test_manager_reports_list_post_bad_request(self):
+        url = reverse(
+            'v1:manager-reports-list',
+            kwargs={'username': self.managers[0].email},
+        )
+
+        response = self.client.post(url, data={}, content_type='application/json')
+        data = json.loads(response.content)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(data[0], 'A `username` or `email` must be specified')
+
     def test_manager_reports_list_post_duplicate(self):
         url = reverse(
             'v1:manager-reports-list',
@@ -95,9 +131,11 @@ class UserManagerRoleViewsTest(TestCase):
             'v1:manager-reports-list',
             kwargs={'username': self.managers[0].email},
         )
-        response = self.client.post(url, {'email': 'non@existent.com'})
+
+        bad_email = 'non@existent.com'
+        response = self.client.post(url, {'email': bad_email})
         self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.data, {"detail": "No user with that email"})
+        self.assertEqual(response.data, {"detail": "No user with identifier: {}".format(bad_email)})
 
     def test_manager_reports_list_delete_all(self):
         url = reverse(

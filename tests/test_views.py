@@ -65,6 +65,24 @@ class UserManagerRoleViewsTest(TestCase):
         patcher.start()
         self.addCleanup(patcher.__exit__, None, None, None)
 
+    def test_access_to_staff_only(self):
+        non_staff_user = User.objects.create(
+            username='test',
+            email='nonstaff@example.org',
+            is_staff=False
+        )
+        non_staff_user.set_password('test')
+        non_staff_user.save()
+        client = APIClient()
+        client.force_authenticate(user=non_staff_user)
+        for url in (
+            reverse('v1:managers-list'),
+            reverse('v1:manager-reports-list', kwargs={'username': self.managers[0].email}),
+            reverse('v1:user-managers-list', kwargs={'username': self.users[0].email})
+        ):
+            response = client.get(url)
+            self.assertEqual(response.status_code, 403)
+
     def test_no_duplicate_managers(self):
         response = self.client.get(reverse('v1:managers-list'))
         self.assertEqual(response.status_code, 200)

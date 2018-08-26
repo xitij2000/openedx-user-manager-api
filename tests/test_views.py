@@ -65,11 +65,16 @@ class UserManagerRoleViewsTest(TestCase):
         patcher.start()
         self.addCleanup(patcher.__exit__, None, None, None)
 
-    def test_access_to_staff_only(self):
+    @ddt.data(
+        {'is_staff': False, 'status_code': 403},
+        {'is_staff': True, 'status_code': 200},
+    )
+    @ddt.unpack
+    def test_restrict_access_to_staff(self, is_staff, status_code):
         non_staff_user = User.objects.create(
             username='test',
             email='nonstaff@example.org',
-            is_staff=False
+            is_staff=is_staff,
         )
         non_staff_user.set_password('test')
         non_staff_user.save()
@@ -81,7 +86,7 @@ class UserManagerRoleViewsTest(TestCase):
             reverse('v1:user-managers-list', kwargs={'username': self.users[0].email})
         ):
             response = client.get(url)
-            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.status_code, status_code)
 
     def test_no_duplicate_managers(self):
         response = self.client.get(reverse('v1:managers-list'))

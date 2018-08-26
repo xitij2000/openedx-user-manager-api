@@ -6,7 +6,7 @@ from __future__ import absolute_import, unicode_literals
 from rest_framework import status
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.generics import ListAPIView, ListCreateAPIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
 from django.contrib.auth.models import User
@@ -65,7 +65,7 @@ class ManagerViewMixin(object):
     Provide common functionality for all manager views.
     """
 
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAdminUser,)
 
     @property
     def authentication_classes(self):  # pragma: no cover

@@ -58,9 +58,8 @@ class UserManagerRoleViewsTest(TestCase):
 
         patcher = patch.object(
             ManagerViewMixin,
-            'authentication_classes',
-            new_callable=PropertyMock,
-            return_value=[SessionAuthentication]
+            'get_authenticators',
+            return_value=[SessionAuthentication()]
         )
         patcher.start()
         self.addCleanup(patcher.__exit__, None, None, None)

@@ -67,15 +67,19 @@ class ManagerViewMixin(object):
 
     permission_classes = (IsAdminUser,)
 
-    @property
-    def authentication_classes(self):  # pragma: no cover
+    def get_authenticators(self):
         """
         Allow users authenticated via OAuth2 or normal session authentication.
         """
-        from openedx.core.lib.api import authentication  # pylint: disable=import-error
+        try:
+            from openedx.core.lib.api.authentication import OAuth2AuthenticationAllowInactiveUser  # pylint: disable=import-error
+            from openedx.core.lib.api.authentication import SessionAuthenticationAllowInactiveUser  # pylint: disable=import-error
+        except ImportError:
+            from edx_rest_framework_extensions.auth.session.authentication import SessionAuthenticationAllowInactiveUser  # pylint: disable=import-error
+
         return [
-            authentication.OAuth2AuthenticationAllowInactiveUser,
-            authentication.SessionAuthenticationAllowInactiveUser,
+            OAuth2AuthenticationAllowInactiveUser(),
+            SessionAuthenticationAllowInactiveUser(),
         ]
 
 
